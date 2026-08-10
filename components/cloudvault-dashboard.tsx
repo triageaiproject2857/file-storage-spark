@@ -79,6 +79,19 @@ function Header({ view, user }: { view: 'backups' | 'admin'; user: User }) {
 function UserDashboard() {
   const [files, setFiles] = useState<BackupFile[]>([])
   const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    async function loadFiles() {
+      try {
+        const fetched = await fetchFiles()
+        setFiles(fetched)
+      } catch (error) {
+        toast.error('Failed to load files. Please check your connection.')
+        setFiles(initialFiles)
+      }
+    }
+    loadFiles()
+  }, [])
   const [isDragging, setIsDragging] = useState(false)
   const [tab, setTab] = useState<'active' | 'trash'>('active')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -123,6 +136,34 @@ function UserDashboard() {
 
   const activeCount = files.filter(f => !f.isDeleted).length;
 
+  const filteredFiles = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(query.toLowerCase())), [files, query])
+  const handleUpload = async (selected: FileList | File[]) => {
+    const file = selected[0]
+    if (!file) return
+    try {
+      const newFile = await uploadFile(file)
+      setFiles((current) => [newFile, ...current])
+      toast.success(`${file.name} added to your backups`)
+    } catch (error) {
+      toast.error(`Failed to upload ${file.name}. Please check your connection or authorization.`)
+    }
+  }
+  const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setIsDragging(false); void handleUpload(event.dataTransfer.files) }
+  const onPick = (event: ChangeEvent<HTMLInputElement>) => { void handleUpload(event.target.files ?? []) }
+  const action = async (kind: 'download' | 'restore' | 'delete', file: BackupFile) => {
+    try {
+      if (kind === 'delete') {
+        await deleteFile(file)
+        setFiles((current) => current.filter((item) => item.id !== file.id))
+        toast.success(`${file.name} deleted`)
+      } else {
+        await downloadFile(file)
+        toast.success(kind === 'restore' ? `${file.name} is ready to restore` : `Downloading ${file.name}`)
+      }
+    } catch (error) {
+      toast.error(`Failed to ${kind} ${file.name}. Please check your network or try again later.`)
+    }
+  }
   return <div className="mx-auto max-w-[1240px] px-5 py-7 md:px-8 md:py-9"><div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-medium text-primary"><Zap className="size-3.5 fill-current" />ALL SYSTEMS OPERATIONAL</div><h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Good morning, Jordan</h1><p className="mt-1 text-sm text-muted-foreground">Keep your important files safe and accessible.</p></div><Button onClick={() => inputRef.current?.click()} className="w-full sm:w-auto"><Plus data-icon="inline-start" />New backup</Button><input ref={inputRef} type="file" className="hidden" onChange={onPick} /></div>
     <div className="mb-7 grid gap-4 md:grid-cols-3"><div className="rounded-xl border border-border bg-card p-5 shadow-sm"><div className="mb-5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Total backups</span><div className="flex size-8 items-center justify-center rounded-lg bg-accent text-accent-foreground"><Archive className="size-4" /></div></div><div className="flex items-baseline gap-1.5"><span className="text-2xl font-semibold tracking-tight">{activeCount}</span><span className="text-sm text-muted-foreground">files</span></div></div><div className="rounded-xl border border-border bg-card p-5 shadow-sm"><div className="mb-5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Last backup</span><div className="flex size-8 items-center justify-center rounded-lg bg-accent text-accent-foreground"><RefreshCw className="size-4" /></div></div><div className="flex items-baseline gap-1.5"><span className="text-2xl font-semibold tracking-tight">Today</span></div><p className="mt-5 flex items-center gap-1.5 text-[11px] text-muted-foreground"><CheckCircle2 className="size-3.5 text-emerald-600" />Completed at 10:42 AM</p></div></div>
     <div onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} className={`mb-8 flex min-h-[156px] flex-col items-center justify-center rounded-xl border border-dashed p-6 text-center transition-colors ${isDragging ? 'border-primary bg-primary/5' : 'border-border bg-card hover:border-primary/50'}`}><div className="mb-3 flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary"><UploadCloud className="size-5" /></div><p className="text-sm font-medium">Drop files here to back them up</p><p className="mt-1 text-xs text-muted-foreground">or <button onClick={() => inputRef.current?.click()} className="font-medium text-primary hover:underline">browse from your computer</button></p><p className="mt-3 text-[10px] text-muted-foreground">Maximum file size: 5 GB</p></div>
