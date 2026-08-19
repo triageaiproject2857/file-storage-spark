@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useRef, useState, useEffect, type DragEvent, type ChangeEvent } from 'react'
+import { awsService } from '@/lib/awsService'
 import { authService, type User } from '@/lib/authService'
 import { awsService, type BackupFile, type ActionLog } from '@/lib/awsService'
 import {
@@ -42,12 +43,42 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 
+export type BackupFile = {
+  id: string
+  name: string
+  type: 'document' | 'image' | 'spreadsheet' | 'archive'
+  size: string
+  date: string
+  status: 'Completed' | 'In progress' | 'Failed'
+  s3Key?: string
+}
+
+const fileIcon = { document: FileText, image: FileImage, spreadsheet: FileSpreadsheet, archive: FileArchive }
+
+// Parse size string to GB (e.g. "2.4 MB" -> 0.0024 GB, "846 MB" -> 0.846 GB)
+function parseSizeToGB(sizeStr: string): number {
+  if (!sizeStr) return 0;
+  const num = parseFloat(sizeStr);
+  if (isNaN(num)) return 0;
+
+  if (sizeStr.toLowerCase().includes('kb')) return num / (1024 * 1024);
+  if (sizeStr.toLowerCase().includes('mb')) return num / 1024;
+  if (sizeStr.toLowerCase().includes('gb')) return num;
+  if (sizeStr.toLowerCase().includes('tb')) return num * 1024;
+
+  // default bytes
+  return num / (1024 * 1024 * 1024);
+}
+
 const fileIcon = { document: FileText, image: FileImage, spreadsheet: FileSpreadsheet, archive: FileArchive }
 
 function Logo() {
   return <div className="flex items-center gap-2.5"><div className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"><Cloud className="size-4" /></div><span className="font-semibold tracking-tight text-sidebar-foreground">CloudVault</span></div>
 }
 
+function Sidebar({ view, setView, storageUsedGB }: { view: 'backups' | 'admin'; setView: (view: 'backups' | 'admin') => void; storageUsedGB: number }) {
+  const percentage = Math.min(100, Math.round((storageUsedGB / 10) * 100));
+  const remaining = Math.max(0, 100 - percentage);
 function Sidebar({ view, setView, user, onLogout }: { view: 'backups' | 'admin'; setView: (view: 'backups' | 'admin') => void; user: User; onLogout: () => void }) {
   const [totalStorage, setTotalStorage] = useState<{ totalBytes: number, formatted: string }>({ totalBytes: 0, formatted: '0 MB' })
   useEffect(() => {
@@ -67,6 +98,8 @@ function Sidebar({ view, setView, user, onLogout }: { view: 'backups' | 'admin';
       </nav></div>
       <div><p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/45">Manage</p><nav className="flex flex-col gap-1"><button className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-sidebar-foreground/65 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"><Settings className="size-4" />Settings</button><button className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-sidebar-foreground/65 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"><LifeBuoy className="size-4" />Help center</button></nav></div>
     </div>
+    <div className="rounded-xl border border-sidebar-border bg-sidebar-accent/40 p-3.5"><div className="mb-2 flex items-center justify-between"><span className="text-xs text-sidebar-foreground/70">Storage used</span><HardDrive className="size-3.5 text-sidebar-foreground/50" /></div><div className="mb-2 flex items-end justify-between"><span className="text-sm font-medium">{storageUsedGB.toFixed(2)} GB</span><span className="text-[11px] text-sidebar-foreground/50">of 10 GB</span></div><Progress value={percentage} className="h-1.5 bg-sidebar-foreground/10" /><p className="mt-2 text-[10px] text-sidebar-foreground/45">{remaining}% remaining</p></div>
+    <div className="mt-5 flex items-center gap-2.5 border-t border-sidebar-border pt-4"><div className="flex size-8 items-center justify-center rounded-full bg-primary/20 text-xs font-semibold text-primary">JD</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">Jordan Davis</p><p className="truncate text-[10px] text-sidebar-foreground/50">jordan@acme.co</p></div><button aria-label="Sign out" className="text-sidebar-foreground/45 hover:text-sidebar-foreground"><LogOut className="size-3.5" /></button></div>
     <div className="rounded-xl border border-sidebar-border bg-sidebar-accent/40 p-3.5"><div className="mb-2 flex items-center justify-between"><span className="text-xs text-sidebar-foreground/70">Storage used</span><HardDrive className="size-3.5 text-sidebar-foreground/50" /></div><div className="mb-2 flex items-end justify-between"><span className="text-sm font-medium">{totalStorage.formatted}</span><span className="text-[11px] text-sidebar-foreground/50">of 10 GB</span></div><Progress value={usagePercent} className="h-1.5 bg-sidebar-foreground/10" /><p className="mt-2 text-[10px] text-sidebar-foreground/45">{100 - usagePercent}% remaining</p></div>
     <div className="mt-5 flex items-center gap-2.5 border-t border-sidebar-border pt-4"><div className="flex size-8 items-center justify-center rounded-full bg-primary/20 text-xs font-semibold text-primary">{user.email.substring(0, 2).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{user.email.split('@')[0]}</p><p className="truncate text-[10px] text-sidebar-foreground/50">{user.email}</p></div><button aria-label="Sign out" onClick={onLogout} className="text-sidebar-foreground/45 hover:text-sidebar-foreground"><LogOut className="size-3.5" /></button></div>
   </aside>
@@ -76,6 +109,7 @@ function Header({ view, user }: { view: 'backups' | 'admin'; user: User }) {
   return <header className="flex h-[72px] items-center justify-between border-b border-border bg-card px-5 md:px-8"><div className="flex items-center gap-3 lg:hidden"><Logo /></div><div className="hidden lg:block"><p className="text-xs text-muted-foreground">Workspace / <span className="text-foreground">{view === 'backups' ? 'My Backups' : 'Admin Panel'}</span></p></div><div className="flex items-center gap-3"><button aria-label="Notifications" className="relative rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"><Bell className="size-4" /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary" /></button><Separator orientation="vertical" className="h-5" /><button className="flex items-center gap-2 rounded-lg p-1.5 pr-2 hover:bg-muted"><div className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">{user.email.substring(0, 2).toUpperCase()}</div><span className="hidden text-xs font-medium sm:inline">{user.email.split('@')[0]}</span><ChevronDown className="size-3.5 text-muted-foreground" /></button></div></header>
 }
 
+function UserDashboard({ files, setFiles, storageUsedGB }: { files: BackupFile[], setFiles: React.Dispatch<React.SetStateAction<BackupFile[]>>, storageUsedGB: number }) {
 function UserDashboard() {
   const [files, setFiles] = useState<BackupFile[]>([])
   const [query, setQuery] = useState('')
@@ -138,6 +172,21 @@ function UserDashboard() {
 
   const filteredFiles = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(query.toLowerCase())), [files, query])
   const handleUpload = async (selected: FileList | File[]) => {
+    const file = selected[0];
+    if (!file) return;
+
+    // Optimistic UI for uploading
+    const tempId = crypto.randomUUID();
+    const tempFile: BackupFile = { id: tempId, name: file.name, type: file.name.endsWith('.zip') ? 'archive' : 'document', size: `${Math.max(1, Math.round(file.size / 1024 / 1024))} MB`, date: 'Just now', status: 'In progress' }
+    setFiles((current) => [tempFile, ...current]);
+
+    try {
+      const newFile = await awsService.uploadFile(file);
+      setFiles((current) => current.map(f => f.id === tempId ? newFile : f));
+      toast.success(`${file.name} added to your backups`)
+    } catch (e) {
+      setFiles((current) => current.map(f => f.id === tempId ? { ...f, status: 'Failed' } : f));
+      toast.error(`Failed to upload ${file.name}`)
     const file = selected[0]
     if (!file) return
     try {
@@ -151,6 +200,25 @@ function UserDashboard() {
   const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); setIsDragging(false); void handleUpload(event.dataTransfer.files) }
   const onPick = (event: ChangeEvent<HTMLInputElement>) => { void handleUpload(event.target.files ?? []) }
   const action = async (kind: 'download' | 'restore' | 'delete', file: BackupFile) => {
+    if (kind === 'delete') {
+      try {
+        await awsService.deleteFile(file);
+        setFiles((current) => current.filter((item) => item.id !== file.id));
+        toast.success(`${file.name} deleted`)
+      } catch (e) {
+        toast.error(`Failed to delete ${file.name}`)
+      }
+    } else {
+      await awsService.downloadFile(file);
+      toast.success(kind === 'restore' ? `${file.name} is ready to restore` : `Downloading ${file.name}`)
+    }
+  }
+
+  const percentage = Math.min(100, Math.round((storageUsedGB / 10) * 100));
+  const availableGB = Math.max(0, 10 - storageUsedGB);
+
+  return <div className="mx-auto max-w-[1240px] px-5 py-7 md:px-8 md:py-9"><div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-medium text-primary"><Zap className="size-3.5 fill-current" />ALL SYSTEMS OPERATIONAL</div><h1 className="text-2xl font-semibold tracking-tight md:text-3xl">Good morning, Jordan</h1><p className="mt-1 text-sm text-muted-foreground">Keep your important files safe and accessible.</p></div><Button onClick={() => inputRef.current?.click()} className="w-full sm:w-auto"><Plus data-icon="inline-start" />New backup</Button><input ref={inputRef} type="file" className="hidden" onChange={onPick} /></div>
+    <div className="mb-7 grid gap-4 md:grid-cols-3"><div className="rounded-xl border border-border bg-card p-5 shadow-sm"><div className="mb-5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Storage used</span><div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"><Database className="size-4" /></div></div><div className="flex items-baseline gap-1.5"><span className="text-2xl font-semibold tracking-tight">{storageUsedGB.toFixed(2)}</span><span className="text-sm text-muted-foreground">GB / 10 GB</span></div><Progress value={percentage} className="mt-4 h-1.5" /><p className="mt-2 text-[11px] text-muted-foreground">{availableGB.toFixed(2)} GB available</p></div><div className="rounded-xl border border-border bg-card p-5 shadow-sm"><div className="mb-5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Total backups</span><div className="flex size-8 items-center justify-center rounded-lg bg-accent text-accent-foreground"><Archive className="size-4" /></div></div><div className="flex items-baseline gap-1.5"><span className="text-2xl font-semibold tracking-tight">{files.length}</span><span className="text-sm text-muted-foreground">files</span></div><p className="mt-5 flex items-center gap-1.5 text-[11px] text-muted-foreground"><span className="flex size-4 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"><ArrowDownToLine className="size-2.5" /></span>12% from last month</p></div><div className="rounded-xl border border-border bg-card p-5 shadow-sm"><div className="mb-5 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Last backup</span><div className="flex size-8 items-center justify-center rounded-lg bg-accent text-accent-foreground"><RefreshCw className="size-4" /></div></div><div className="flex items-baseline gap-1.5"><span className="text-2xl font-semibold tracking-tight">{files.length > 0 ? files[0].date : 'None'}</span></div><p className="mt-5 flex items-center gap-1.5 text-[11px] text-muted-foreground"><CheckCircle2 className="size-3.5 text-emerald-600" />{files.length > 0 ? 'Completed' : 'No backups yet'}</p></div></div>
     try {
       if (kind === 'delete') {
         await deleteFile(file)
@@ -296,6 +364,20 @@ function AuthScreen({ onAuthSuccess }: { onAuthSuccess: () => void }) {
 
 export default function CloudVaultDashboard() {
   const [view, setView] = useState<'backups' | 'admin'>('backups')
+  const [files, setFiles] = useState<BackupFile[]>([])
+
+  useEffect(() => {
+    awsService.fetchFiles().then(fetchedFiles => {
+      setFiles(fetchedFiles)
+    }).catch(err => {
+      console.error("Failed to load files", err)
+      toast.error("Failed to load backups")
+    })
+  }, [])
+
+  const storageUsedGB = files.reduce((acc, file) => acc + parseSizeToGB(file.size), 0)
+
+  return <div className="flex min-h-screen bg-background"><Sidebar view={view} setView={setView} storageUsedGB={storageUsedGB} /><div className="flex min-w-0 flex-1 flex-col"><Header view={view} /><main className="flex-1">{view === 'backups' ? <UserDashboard files={files} setFiles={setFiles} storageUsedGB={storageUsedGB} /> : <AdminPanel />}</main><footer className="flex items-center justify-between border-t border-border px-5 py-4 text-[10px] text-muted-foreground md:px-8"><span>CloudVault © 2025</span><span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-emerald-500" />Secure and encrypted</span></footer></div></div>
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
