@@ -134,13 +134,16 @@ function UserDashboard() {
     awsService.fetchFiles().then(setFiles)
   }, [])
 
-  const filteredFiles = useMemo(() => files.filter((file) => {
-    if ((tab === 'active' && file.isDeleted) || (tab === 'trash' && !file.isDeleted)) return false;
+  const filteredFiles = useMemo(() => {
+    // ⚡ Bolt: Cache normalized query outside loop to avoid O(n) redundant calculations
     const q = query.toLowerCase();
-    return file.name.toLowerCase().includes(q) ||
-           file.size.toLowerCase().includes(q) ||
-           file.date.toLowerCase().includes(q);
-  }), [files, query, tab])
+    return files.filter((file) => {
+      if ((tab === 'active' && file.isDeleted) || (tab === 'trash' && !file.isDeleted)) return false;
+      return file.name.toLowerCase().includes(q) ||
+             file.size.toLowerCase().includes(q) ||
+             file.date.toLowerCase().includes(q);
+    });
+  }, [files, query, tab])
 
   const handleUpload = async (selected: FileList | File[]) => {
     const file = selected[0];
@@ -170,7 +173,11 @@ function UserDashboard() {
 
   const activeCount = files.filter(f => !f.isDeleted).length;
 
-  const filteredFiles = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(query.toLowerCase())), [files, query])
+  const filteredFiles = useMemo(() => {
+    // ⚡ Bolt: Cache normalized query outside loop to avoid O(n) redundant calculations
+    const q = query.toLowerCase();
+    return files.filter((file) => file.name.toLowerCase().includes(q));
+  }, [files, query])
   const handleUpload = async (selected: FileList | File[]) => {
     const file = selected[0];
     if (!file) return;
